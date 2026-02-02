@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face ID Liveness</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 { margin-bottom: 15px; font-size: 22px; font-weight: 600; }
+
+        #progress {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .dot {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.2);
+            transition: all 0.3s ease;
+        }
+        .dot.completed { background: #2ecc71; }
+        .dot.active { background: #f39c12; animation: pulse 1s infinite; }
+
+        #status {
+            padding: 8px 16px;
+            border-radius: 20px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .connecting { background: #f39c12; }
+        .waiting { background: #3498db; }
+        .action { background: #9b59b6; }
+        .success { background: #2ecc71; }
+        .error { background: #e74c3c; }
+
+        #instruction-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            padding: 20px 40px;
+            margin-bottom: 20px;
+            text-align: center;
+            min-width: 200px;
+        }
+        #instruction {
+            font-size: 28px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        #arrow {
+            font-size: 60px;
+            margin-top: 10px;
+        }
+
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 350px;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 4px solid #667eea;
+        }
+        #video-container.centered { border-color: #2ecc71; }
+        #video-container.action { border-color: #f39c12; }
+
+        video {
+            width: 100%;
+            display: block;
+            transform: scaleX(-1);
+        }
+
+        #face-guide {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 180px;
+            height: 240px;
+            border: 3px dashed rgba(255,255,255,0.5);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        #face-guide.detected { border-color: #2ecc71; border-style: solid; }
+
+        #info {
+            margin-top: 20px;
+            padding: 12px 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            font-size: 14px;
+            display: flex;
+            gap: 20px;
+        }
+
+        .verified-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(46, 204, 113, 0.95);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            animation: fadeIn 0.3s ease;
+        }
+        .verified-overlay .icon { font-size: 100px; margin-bottom: 20px; }
+        .verified-overlay .text { font-size: 32px; font-weight: bold; }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.8; }
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Face ID Tekshiruvi</h1>
+
+    <div id="progress">
+        <div class="dot" id="dot1"></div>
+        <div class="dot" id="dot2"></div>
+        <div class="dot" id="dot3"></div>
+    </div>
+
+    <div id="status" class="connecting">Ulanmoqda...</div>
+
+    <div id="instruction-box">
+        <div id="instruction">-</div>
+        <div id="arrow"></div>
+    </div>
+
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+        <div id="face-guide"></div>
+    </div>
+
+    <div id="timer" style="margin-top:15px;font-size:24px;font-weight:bold;color:#f39c12;">⏱ 30s</div>
+
+    <div id="info">
+        <span>Yaw: <strong id="yaw">-</strong></span>
+        <span>Pitch: <strong id="pitch">-</strong></span>
+    </div>
+
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const instructionEl = document.getElementById('instruction');
+        const arrowEl = document.getElementById('arrow');
+        const yawEl = document.getElementById('yaw');
+        const pitchEl = document.getElementById('pitch');
+        const videoContainer = document.getElementById('video-container');
+        const faceGuide = document.getElementById('face-guide');
+        const dots = [document.getElementById('dot1'), document.getElementById('dot2'), document.getElementById('dot3')];
+
+        const arrows = {
+            'CENTER': '😐',
+            'LEFT': '👈',
+            'RIGHT': '👉',
+            'UP': '👆',
+            'DOWN': '👇',
+            'VERIFIED': '✅'
+        };
+
+        const instructions = {
+            'CENTER': 'KAMERAGA QARANG',
+            'LEFT': 'CHAPGA',
+            'RIGHT': 'ONGGA',
+            'UP': 'YUQORIGA',
+            'DOWN': 'PASTGA',
+            'VERIFIED': 'TASDIQLANDI!'
+        };
+
+        let ws;
+        let streaming = false;
+        let timerInterval;
+        let timeLeft = 30;
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: 640, height: 480 }
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    connectWebSocket();
+                };
+            } catch (err) {
+                statusEl.textContent = 'Kamera xatosi: ' + err.message;
+                statusEl.className = 'error';
+            }
+        }
+
+        function connectWebSocket() {
+            const host = window.location.hostname || 'localhost';
+            ws = new WebSocket(`ws://${host}:8001/ws`);
+
+            ws.onopen = () => {
+                statusEl.textContent = 'Tayyor';
+                statusEl.className = 'waiting';
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received:', data);
+                    handleMessage(data);
+
+                    if (streaming && data.type !== 'complete') {
+                        setTimeout(sendFrame, 150);
+                    }
+                } catch (err) {
+                    console.error('Message error:', err);
+                }
+            };
+
+            ws.onerror = () => {
+                statusEl.textContent = 'Ulanish xatosi';
+                statusEl.className = 'error';
+            };
+
+            ws.onclose = () => {
+                streaming = false;
+            };
+        }
+
+        function handleMessage(data) {
+            // Update yaw/pitch
+            if (data.yaw !== undefined) {
+                yawEl.textContent = data.yaw + '°';
+                pitchEl.textContent = data.pitch + '°';
+            }
+
+            // Update progress dots
+            updateProgress(data.success || 0);
+
+            // Update instruction
+            const instr = data.instruction || 'CENTER';
+            instructionEl.textContent = instructions[instr] || instr;
+            arrowEl.textContent = arrows[instr] || '';
+
+            // Handle different message types
+            switch(data.type) {
+                case 'start':
+                    streaming = true;
+                    timeLeft = 30;
+                    timerInterval = setInterval(() => {
+                        timeLeft--;
+                        document.getElementById('timer').textContent = `⏱ ${timeLeft}s`;
+                        if (timeLeft <= 5) {
+                            document.getElementById('timer').style.color = '#e74c3c';
+                        }
+                        if (timeLeft <= 0) {
+                            clearInterval(timerInterval);
+                        }
+                    }, 1000);
+                    sendFrame();
+                    statusEl.textContent = 'Yuzingizni kameraga to\'g\'ri tuting';
+                    statusEl.className = 'waiting';
+                    break;
+
+                case 'no_face':
+                    statusEl.textContent = 'Yuz topilmadi';
+                    statusEl.className = 'error';
+                    faceGuide.classList.remove('detected');
+                    videoContainer.className = '';
+                    break;
+
+                case 'waiting':
+                    faceGuide.classList.add('detected');
+                    if (data.state === 'WAITING_CENTER') {
+                        statusEl.textContent = 'Kameraga to\'g\'ri qarang';
+                        statusEl.className = 'waiting';
+                        videoContainer.className = '';
+                    } else {
+                        if (data.wrong_direction && data.wrong_direction !== instr) {
+                            statusEl.textContent = `❌ Noto'g'ri! ${instructions[instr]} qarang`;
+                            statusEl.className = 'error';
+                        } else {
+                            statusEl.textContent = instructions[instr] + ' qarang';
+                            statusEl.className = 'action';
+                        }
+                        videoContainer.className = 'action';
+                    }
+                    break;
+
+                case 'challenge':
+                    faceGuide.classList.add('detected');
+                    statusEl.textContent = instructions[instr] + ' qarang!';
+                    statusEl.className = 'action';
+                    videoContainer.className = 'action';
+                    break;
+
+                case 'success':
+                    faceGuide.classList.add('detected');
+                    statusEl.textContent = 'Yaxshi! Endi markazga qarang';
+                    statusEl.className = 'success';
+                    videoContainer.className = 'centered';
+                    break;
+
+                case 'complete':
+                    showVerified();
+                    break;
+
+                case 'failed':
+                    showFailed(data.message || 'Tekshiruv muvaffaqiyatsiz');
+                    break;
+            }
+        }
+
+        function updateProgress(success) {
+            dots.forEach((dot, i) => {
+                dot.className = 'dot';
+                if (i < success) {
+                    dot.classList.add('completed');
+                } else if (i === success) {
+                    dot.classList.add('active');
+                }
+            });
+        }
+
+        function sendFrame() {
+            if (!streaming || ws.readyState !== WebSocket.OPEN) {
+                console.log('Not sending - streaming:', streaming, 'ws state:', ws.readyState);
+                return;
+            }
+
+            try {
+                ctx.drawImage(video, 0, 0);
+                const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+                ws.send(JSON.stringify({ frame: base64 }));
+            } catch (err) {
+                console.error('Send error:', err);
+            }
+        }
+
+        function showVerified() {
+            streaming = false;
+            clearInterval(timerInterval);
+            const overlay = document.createElement('div');
+            overlay.className = 'verified-overlay';
+            overlay.innerHTML = `
+                <div class="icon">✅</div>
+                <div class="text">TASDIQLANDI!</div>
+                <div style="margin-top:20px;font-size:18px;">Siz haqiqiy odamsiz</div>
+            `;
+            document.body.appendChild(overlay);
+            ws.close();
+        }
+
+        function showFailed(message) {
+            streaming = false;
+            clearInterval(timerInterval);
+            const overlay = document.createElement('div');
+            overlay.className = 'verified-overlay';
+            overlay.style.background = 'rgba(231, 76, 60, 0.95)';
+            overlay.innerHTML = `
+                <div class="icon">❌</div>
+                <div class="text">MUVAFFAQIYATSIZ</div>
+                <div style="margin-top:20px;font-size:18px;">${message}</div>
+                <button onclick="location.reload()" style="margin-top:30px;padding:15px 30px;font-size:18px;border:none;border-radius:10px;background:white;color:#e74c3c;cursor:pointer;">Qayta urinish</button>
+            `;
+            document.body.appendChild(overlay);
+            ws.close();
+        }
+
+        startCamera();
+    </script>
+</body>
+</html>
