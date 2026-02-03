@@ -251,3 +251,9 @@ async def websocket_liveness(websocket: WebSocket):
 
     except WebSocketDisconnect:
         pass
+    finally:
+        # WebSocket ni yopish
+        try:
+            await websocket.close()
+        except:
+            pass

@@ -196,13 +196,22 @@
         let streaming = false;
         let timerInterval;
         let timeLeft = 30;
+        let cameraStream = null;
+
+        function stopCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+                video.srcObject = null;
+            }
+        }
 
         async function startCamera() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
+                cameraStream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'user', width: 640, height: 480 }
                 });
-                video.srcObject = stream;
+                video.srcObject = cameraStream;
                 video.onloadedmetadata = () => {
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
@@ -360,6 +369,7 @@
         function showVerified() {
             streaming = false;
             clearInterval(timerInterval);
+            stopCamera();
             const overlay = document.createElement('div');
             overlay.className = 'verified-overlay';
             overlay.innerHTML = `
@@ -374,6 +384,7 @@
         function showFailed(message) {
             streaming = false;
             clearInterval(timerInterval);
+            stopCamera();
             const overlay = document.createElement('div');
             overlay.className = 'verified-overlay';
             overlay.style.background = 'rgba(231, 76, 60, 0.95)';
