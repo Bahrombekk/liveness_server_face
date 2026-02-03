@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face ID Test</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 { margin: 15px 0; font-size: 24px; }
+        #progress { display: flex; gap: 12px; margin: 10px 0; }
+        .dot { width: 16px; height: 16px; border-radius: 50%; background: rgba(255,255,255,0.2); transition: 0.3s; }
+        .dot.done { background: #2ecc71; }
+        .dot.active { background: #f39c12; animation: pulse 1s infinite; }
+        #status { padding: 10px 24px; border-radius: 20px; margin: 10px 0; font-weight: bold; background: #3498db; }
+        #status.error { background: #e74c3c; }
+        #status.success { background: #2ecc71; }
+        #status.action { background: #9b59b6; }
+        #instruction { font-size: 28px; font-weight: bold; margin: 8px 0; }
+        #arrow { font-size: 60px; margin: 5px 0; }
+        #video-box { position: relative; width: 100%; max-width: 360px; border: 4px solid #667eea; border-radius: 20px; overflow: hidden; margin: 15px 0; transition: 0.3s; }
+        #video-box.green { border-color: #2ecc71; }
+        #video-box.orange { border-color: #f39c12; }
+        video { width: 100%; display: block; transform: scaleX(-1); }
+        #guide { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 200px; height: 260px; border: 3px dashed rgba(255,255,255,0.4); border-radius: 50%; pointer-events: none; transition: 0.3s; }
+        #guide.found { border-color: #2ecc71; border-style: solid; }
+        #timer { margin-top: 10px; font-size: 24px; font-weight: bold; color: #f39c12; }
+        #debug { margin-top: 10px; font-size: 12px; opacity: 0.6; }
+        .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; animation: fadeIn 0.3s; }
+        .overlay .icon { font-size: 120px; margin-bottom: 20px; }
+        .overlay .text { font-size: 36px; font-weight: bold; }
+        .overlay .sub { margin-top: 15px; font-size: 18px; }
+        .btn { margin-top: 30px; padding: 15px 40px; font-size: 18px; border: none; border-radius: 12px; cursor: pointer; background: white; font-weight: bold; }
+        @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.3); opacity: 0.7; } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <h1>Face ID Tekshiruvi</h1>
+    <div id="progress"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+    <div id="status">Kamera ochilmoqda...</div>
+    <div id="instruction">-</div>
+    <div id="arrow"></div>
+    <div id="video-box">
+        <video id="video" autoplay playsinline muted></video>
+        <div id="guide"></div>
+    </div>
+    <div id="timer"></div>
+    <div id="debug"></div>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        // SERVER MANZILI - lokal server
+        const SERVER = window.location.hostname + ':8001';
+        const WS_URL = 'ws://' + SERVER + '/ws';
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const instrEl = document.getElementById('instruction');
+        const arrowEl = document.getElementById('arrow');
+        const videoBox = document.getElementById('video-box');
+        const guide = document.getElementById('guide');
+        const timerEl = document.getElementById('timer');
+        const debugEl = document.getElementById('debug');
+        const dots = document.querySelectorAll('.dot');
+
+        const ARROWS = { CENTER: '😐', LEFT: '👈', RIGHT: '👉', UP: '👆', DOWN: '👇' };
+        const TEXTS = { CENTER: 'KAMERAGA QARANG', LEFT: 'CHAPGA', RIGHT: 'ONGGA', UP: 'YUQORIGA', DOWN: 'PASTGA' };
+
+        let ws, streaming = false, cameraStream = null;
+        let timerInterval, timeLeft = 30;
+
+        debugEl.textContent = 'WS: ' + WS_URL;
+
+        async function start() {
+            try {
+                statusEl.textContent = 'Kamera ochilmoqda...';
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: 640, height: 480 }
+                });
+                video.srcObject = cameraStream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    statusEl.textContent = 'Serverga ulanmoqda...';
+                    connect();
+                };
+            } catch (e) {
+                statusEl.textContent = 'Kamera xatosi: ' + e.message;
+                statusEl.className = 'error';
+            }
+        }
+
+        function stopCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+                video.srcObject = null;
+            }
+        }
+
+        function connect() {
+            debugEl.textContent = 'Ulanmoqda: ' + WS_URL;
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                statusEl.textContent = 'Ulandi! Yuzni kameraga tuting';
+                debugEl.textContent = 'WS ulandi';
+            };
+
+            ws.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                debugEl.textContent = data.type + ' | yaw:' + (data.yaw||'-') + ' pitch:' + (data.pitch||'-');
+                handle(data);
+                if (streaming && data.type !== 'complete' && data.type !== 'failed') {
+                    setTimeout(sendFrame, 150);
+                }
+            };
+
+            ws.onerror = () => {
+                statusEl.textContent = 'Server bilan ulanib bolmadi!';
+                statusEl.className = 'error';
+                debugEl.textContent = 'WS xato - server ishlamayaptimi?';
+            };
+
+            ws.onclose = () => {
+                streaming = false;
+                debugEl.textContent = 'WS yopildi';
+            };
+        }
+
+        function handle(data) {
+            const instr = data.instruction || 'CENTER';
+            instrEl.textContent = TEXTS[instr] || instr;
+            arrowEl.textContent = ARROWS[instr] || '';
+
+            dots.forEach((d, i) => {
+                d.className = 'dot';
+                if (i < (data.success || 0)) d.classList.add('done');
+                else if (i === (data.success || 0)) d.classList.add('active');
+            });
+
+            switch (data.type) {
+                case 'start':
+                    streaming = true;
+                    timeLeft = 30;
+                    timerEl.textContent = '30s';
+                    timerEl.style.color = '#f39c12';
+                    timerInterval = setInterval(() => {
+                        timeLeft--;
+                        timerEl.textContent = timeLeft + 's';
+                        if (timeLeft <= 5) timerEl.style.color = '#e74c3c';
+                        if (timeLeft <= 0) clearInterval(timerInterval);
+                    }, 1000);
+                    sendFrame();
+                    statusEl.textContent = 'Yuzingizni markazga tuting';
+                    statusEl.className = '';
+                    break;
+
+                case 'no_face':
+                    statusEl.textContent = 'Yuz topilmadi';
+                    statusEl.className = 'error';
+                    guide.className = '';
+                    videoBox.className = '';
+                    break;
+
+                case 'waiting':
+                    guide.className = 'found';
+                    if (data.state === 'WAITING_CENTER') {
+                        statusEl.textContent = 'Kameraga togri qarang';
+                        statusEl.className = '';
+                        videoBox.className = '';
+                    } else {
+                        if (data.wrong_direction) {
+                            statusEl.textContent = 'XATO! ' + TEXTS[instr] + ' qarang';
+                            statusEl.className = 'error';
+                        } else {
+                            statusEl.textContent = TEXTS[instr] + ' qarang';
+                            statusEl.className = 'action';
+                        }
+                        videoBox.className = 'orange';
+                    }
+                    break;
+
+                case 'challenge':
+                    guide.className = 'found';
+                    statusEl.textContent = TEXTS[instr] + ' qarang!';
+                    statusEl.className = 'action';
+                    videoBox.className = 'orange';
+                    break;
+
+                case 'success':
+                    guide.className = 'found';
+                    statusEl.textContent = 'Yaxshi! Markazga qarang';
+                    statusEl.className = 'success';
+                    videoBox.className = 'green';
+                    break;
+
+                case 'complete':
+                    finish(true);
+                    break;
+
+                case 'failed':
+                    finish(false, data.message);
+                    break;
+            }
+        }
+
+        function sendFrame() {
+            if (!streaming || ws.readyState !== WebSocket.OPEN) return;
+            ctx.drawImage(video, 0, 0);
+            const b64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+            ws.send(JSON.stringify({ frame: b64 }));
+        }
+
+        function finish(ok, msg) {
+            streaming = false;
+            clearInterval(timerInterval);
+            stopCamera();
+            const o = document.createElement('div');
+            o.className = 'overlay';
+            o.style.background = ok ? 'rgba(46,204,113,0.95)' : 'rgba(231,76,60,0.95)';
+            o.innerHTML = `
+                <div class="icon">${ok ? '✅' : '❌'}</div>
+                <div class="text">${ok ? 'TASDIQLANDI!' : 'MUVAFFAQIYATSIZ'}</div>
+                <div class="sub">${ok ? 'Siz haqiqiy odamsiz' : (msg || 'Tekshiruv otmadi')}</div>
+                <button class="btn" onclick="location.reload()" style="color:${ok ? '#2ecc71' : '#e74c3c'}">Qayta urinish</button>
+            `;
+            document.body.appendChild(o);
+            if (ws) ws.close();
+        }
+
+        start();
+    </script>
+</body>
+</html>
