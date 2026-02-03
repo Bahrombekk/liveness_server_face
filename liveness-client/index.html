@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liveness Detection</title>
+    <link rel="stylesheet" href="css/liveness.css">
+</head>
+<body>
+
+<div class="liveness-container" id="livenessContainer">
+    <h2 class="liveness-title">Face Verification</h2>
+
+    <!-- Progress -->
+    <div class="liveness-progress">
+        <div class="liveness-dot" id="dot0"></div>
+        <div class="liveness-dot" id="dot1"></div>
+        <div class="liveness-dot" id="dot2"></div>
+    </div>
+
+    <!-- Instruction -->
+    <div class="liveness-instruction" id="instruction">Click "Start" to begin</div>
+
+    <!-- Camera -->
+    <div class="liveness-video-wrap" id="videoWrap">
+        <video id="video" autoplay playsinline></video>
+        <div class="liveness-oval"></div>
+    </div>
+
+    <!-- Status -->
+    <div class="liveness-status" id="status"></div>
+
+    <!-- Start button -->
+    <button class="liveness-btn" id="startBtn" onclick="LivenessCheck.start()">Start Verification</button>
+
+    <canvas id="canvas" style="display:none"></canvas>
+</div>
+
+<script src="js/liveness.js"></script>
+<script>
+    // ---- CONFIGURATION ----
+    // Change this URL to your liveness API server
+    LivenessCheck.init({
+        wsUrl: 'wss://face-check.das-uty.uz/ws',
+        containerId: 'livenessContainer',
+        onSuccess: function () {
+            console.log('Liveness verified!');
+            // TODO: Call your backend API here
+            // fetch('/api/verify', { method: 'POST', ... })
+        },
+        onFail: function (reason, message) {
+            console.log('Failed:', reason, message);
+            // TODO: Handle failure
+        }
+    });
+</script>
+</body>
+</html>
