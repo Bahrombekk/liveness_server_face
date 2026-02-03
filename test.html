@@ -225,7 +225,10 @@
 
         function connectWebSocket() {
             const host = window.location.hostname || 'localhost';
-            ws = new WebSocket(`ws://${host}:8001/ws`);
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const port = window.location.port || (window.location.protocol === 'https:' ? '' : '8001');
+            const wsUrl = port ? `${protocol}//${host}:${port}/ws` : `${protocol}//${host}/ws`;
+            ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
                 statusEl.textContent = 'Tayyor';
